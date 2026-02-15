@@ -72,6 +72,32 @@ def init_db():
         """)
 
 
+# --- Authentication (read from Quendaward) ---
+
+def authenticate_admin(callsign: str, password: str) -> dict | None:
+    """Authenticate an admin operator against Quendaward's operators table.
+
+    Returns the operator dict (callsign, operator_name) on success, None on failure.
+    """
+    import bcrypt
+
+    callsign = callsign.strip().upper()
+    with get_quendaward_db() as conn:
+        row = conn.execute(
+            "SELECT callsign, operator_name, password_hash, is_admin FROM operators WHERE callsign = ?",
+            (callsign,),
+        ).fetchone()
+
+    if not row:
+        return None
+    if not row["is_admin"]:
+        return None
+    if not bcrypt.checkpw(password.encode(), row["password_hash"].encode()):
+        return None
+
+    return {"callsign": row["callsign"], "operator_name": row["operator_name"]}
+
+
 # --- Award/Callsign operations (read from Quendaward) ---
 
 def get_all_callsigns() -> list[dict]:

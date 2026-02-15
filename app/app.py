@@ -5,8 +5,6 @@ information and allows admins to upload/manage media for each callsign.
 """
 
 import os
-import hashlib
-import hmac
 import base64
 
 import streamlit as st
@@ -15,23 +13,12 @@ import database as db
 import media_utils as mu
 
 # --- Configuration ---
-ADMIN_PASSWORD_HASH = os.environ.get(
-    "ADMIN_PASSWORD_HASH",
-    # Default password: "admin" (sha256). Change via environment variable.
-    hashlib.sha256(b"admin").hexdigest(),
-)
 APP_TITLE = os.environ.get("APP_TITLE", "Special Callsign Media Sharing")
 
 
 def init():
     """One-time initialization."""
     db.init_db()
-
-
-def check_password(password: str) -> bool:
-    """Verify admin password."""
-    candidate = hashlib.sha256(password.encode()).hexdigest()
-    return hmac.compare_digest(candidate, ADMIN_PASSWORD_HASH)
 
 
 def render_award_badge(award: dict):
@@ -188,26 +175,41 @@ def render_media_grid(items: list[dict], media_type: str):
 # ──────────────────────────────────────────────
 
 def page_admin_login():
-    """Admin login page."""
+    """Admin login page using Quendaward operator credentials."""
     st.title("Admin Login")
-    st.markdown("Enter the admin password to manage media content.")
+    st.markdown("Log in with your Quendaward admin callsign and password.")
 
+    callsign = st.text_input("Callsign")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
-        if check_password(password):
-            st.session_state["admin_authenticated"] = True
-            st.session_state["page"] = "Admin Panel"
-            st.rerun()
+        if not callsign.strip() or not password:
+            st.error("Both callsign and password are required.")
         else:
-            st.error("Invalid password.")
+            operator = db.authenticate_admin(callsign, password)
+            if operator:
+                st.session_state["admin_authenticated"] = True
+                st.session_state["admin_callsign"] = operator["callsign"]
+                st.session_state["admin_name"] = operator["operator_name"]
+                st.session_state["page"] = "Admin Panel"
+                st.rerun()
+            else:
+                st.error("Invalid credentials or insufficient permissions.")
 
 
 def page_admin_panel():
     """Admin panel for managing media content."""
     st.title("Admin Panel")
 
+    admin_cs = st.session_state.get("admin_callsign", "")
+    admin_name = st.session_state.get("admin_name", "")
+    if admin_cs:
+        label = f"{admin_name} ({admin_cs})" if admin_name else admin_cs
+        st.sidebar.markdown(f"Logged in as **{label}**")
+
     if st.sidebar.button("Logout"):
         st.session_state["admin_authenticated"] = False
+        st.session_state.pop("admin_callsign", None)
+        st.session_state.pop("admin_name", None)
         st.session_state["page"] = "Gallery"
         st.rerun()
 

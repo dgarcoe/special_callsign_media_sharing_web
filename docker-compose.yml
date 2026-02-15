@@ -12,7 +12,6 @@ services:
       - QUENDAWARD_DB_PATH=/quendaward_data/ham_coordinator.db
       - MEDIA_DB_PATH=/data/media.db
       - MEDIA_DIR=/data/media
-      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:-8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918}
       - APP_TITLE=${APP_TITLE:-Special Callsign Media Sharing}
       - STREAMLIT_SERVER_BASE_URL_PATH=/quendaward_media
     networks:
