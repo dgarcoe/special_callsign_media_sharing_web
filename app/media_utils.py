@@ -1,7 +1,9 @@
 """Utilities for media file handling."""
 
+import io
 import os
 import uuid
+import zipfile
 from pathlib import Path
 
 MEDIA_DIR = os.environ.get("MEDIA_DIR", "/data/media")
@@ -68,3 +70,25 @@ def format_file_size(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024):.1f} MB"
     else:
         return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+
+def build_zip(media_items: list[dict]) -> bytes:
+    """Build a ZIP archive from a list of media items. Returns the ZIP bytes."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        seen_names: dict[str, int] = {}
+        for item in media_items:
+            file_path = os.path.join(MEDIA_DIR, item["filename"])
+            if not os.path.exists(file_path):
+                continue
+            # Deduplicate filenames within the archive
+            name = item["original_filename"]
+            if name in seen_names:
+                seen_names[name] += 1
+                stem = Path(name).stem
+                ext = Path(name).suffix
+                name = f"{stem}_{seen_names[name]}{ext}"
+            else:
+                seen_names[name] = 0
+            zf.write(file_path, name)
+    return buf.getvalue()

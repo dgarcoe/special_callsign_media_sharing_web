@@ -103,10 +103,36 @@ def page_gallery():
             st.subheader(f"{icon} {mtype.capitalize()}s")
             render_media_grid(items, mtype)
 
+        # Download all media for this callsign as ZIP
+        zip_data = mu.build_zip(media_items)
+        if zip_data:
+            st.download_button(
+                label=f"Download all {cs['name']} media as ZIP",
+                data=zip_data,
+                file_name=f"{cs['name']}_media.zip",
+                mime="application/zip",
+                key=f"zip_{cs['id']}",
+            )
+
         st.divider()
 
     if not found_any:
         st.info("No media found matching the selected filters.")
+
+
+def _render_download_button(item: dict):
+    """Render a download button for a single media item."""
+    file_path = mu.get_media_path(item["filename"])
+    if os.path.exists(file_path):
+        size_str = mu.format_file_size(item["file_size"]) if item["file_size"] else ""
+        label = f"Download ({size_str})" if size_str else "Download"
+        with open(file_path, "rb") as f:
+            st.download_button(
+                label=label,
+                data=f,
+                file_name=item["original_filename"],
+                key=f"dl_{item['id']}",
+            )
 
 
 def render_media_grid(items: list[dict], media_type: str):
@@ -122,6 +148,7 @@ def render_media_grid(items: list[dict], media_type: str):
                     st.warning(f"File missing: {item['original_filename']}")
                 if item["description"]:
                     st.caption(item["description"])
+                _render_download_button(item)
 
     elif media_type == "video":
         for item in items:
@@ -133,6 +160,7 @@ def render_media_grid(items: list[dict], media_type: str):
                 st.video(file_path)
             else:
                 st.warning(f"File missing: {item['original_filename']}")
+            _render_download_button(item)
 
     elif media_type == "audio":
         for item in items:
@@ -144,22 +172,15 @@ def render_media_grid(items: list[dict], media_type: str):
                 st.audio(file_path)
             else:
                 st.warning(f"File missing: {item['original_filename']}")
+            _render_download_button(item)
 
     elif media_type == "document":
         for item in items:
             file_path = mu.get_media_path(item["filename"])
-            size_str = mu.format_file_size(item["file_size"]) if item["file_size"] else ""
             st.markdown(f"**{item['title']}**  \n{item['description'] or ''}")
-            if os.path.exists(file_path):
-                with open(file_path, "rb") as f:
-                    st.download_button(
-                        label=f"Download {item['original_filename']} ({size_str})",
-                        data=f,
-                        file_name=item["original_filename"],
-                        key=f"dl_{item['id']}",
-                    )
-            else:
+            if not os.path.exists(file_path):
                 st.warning(f"File missing: {item['original_filename']}")
+            _render_download_button(item)
 
 
 # ──────────────────────────────────────────────
@@ -198,7 +219,7 @@ def page_admin_panel():
 
 
 def admin_upload_media():
-    """Upload new media content."""
+    """Upload new media content with per-file title and description."""
     st.subheader("Upload New Media")
 
     callsigns = db.get_all_callsigns()
@@ -218,9 +239,6 @@ def admin_upload_media():
     if award:
         render_award_badge(award)
 
-    title = st.text_input("Title")
-    description = st.text_area("Description", height=100)
-
     all_extensions = []
     for exts in mu.ALLOWED_EXTENSIONS.values():
         all_extensions.extend(exts)
@@ -231,26 +249,57 @@ def admin_upload_media():
         type=[ext.lstrip(".") for ext in all_extensions],
     )
 
-    if st.button("Upload", type="primary") and uploaded_files:
-        if not title.strip():
-            st.error("Title is required.")
+    if not uploaded_files:
+        return
+
+    # Per-file title and description fields
+    st.markdown("---")
+    st.markdown("**Fill in details for each file:**")
+
+    file_metadata: list[dict] = []
+    all_valid = True
+    for idx, uploaded_file in enumerate(uploaded_files):
+        media_type = mu.detect_media_type(uploaded_file.name)
+        if not media_type:
+            st.warning(f"Unsupported file type: {uploaded_file.name} (will be skipped)")
+            continue
+
+        icon = mu.MEDIA_TYPE_ICONS.get(media_type, "")
+        with st.expander(f"{icon} {uploaded_file.name}", expanded=True):
+            title = st.text_input(
+                "Title", key=f"upload_title_{idx}",
+                value=uploaded_file.name.rsplit(".", 1)[0],
+            )
+            description = st.text_area(
+                "Description", key=f"upload_desc_{idx}", height=68,
+            )
+            if not title.strip():
+                all_valid = False
+            file_metadata.append({
+                "file": uploaded_file,
+                "title": title,
+                "description": description,
+                "media_type": media_type,
+            })
+
+    if not file_metadata:
+        return
+
+    if st.button("Upload all", type="primary"):
+        if not all_valid:
+            st.error("Every file needs a title.")
             return
 
         success_count = 0
-        for uploaded_file in uploaded_files:
-            media_type = mu.detect_media_type(uploaded_file.name)
-            if not media_type:
-                st.warning(f"Unsupported file type: {uploaded_file.name}")
-                continue
-
-            stored_name, file_size = mu.save_uploaded_file(uploaded_file)
+        for meta in file_metadata:
+            stored_name, file_size = mu.save_uploaded_file(meta["file"])
             db.create_media(
                 award_id=award_id,
-                title=title.strip(),
-                description=description.strip(),
-                media_type=media_type,
+                title=meta["title"].strip(),
+                description=meta["description"].strip(),
+                media_type=meta["media_type"],
                 filename=stored_name,
-                original_filename=uploaded_file.name,
+                original_filename=meta["file"].name,
                 file_size=file_size,
             )
             success_count += 1
