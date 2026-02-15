@@ -24,3 +24,4 @@ volumes:
 networks:
   quendaward-network:
     external: true
+    name: ${QUENDAWARD_NETWORK_NAME:-ea1rfi-network}
