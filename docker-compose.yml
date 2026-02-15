@@ -16,26 +16,11 @@ services:
       - APP_TITLE=${APP_TITLE:-Special Callsign Media Sharing}
       - STREAMLIT_SERVER_BASE_URL_PATH=/quendaward_media
     networks:
-      - ea1rfi-network
-
-  nginx:
-    image: nginx:alpine
-    container_name: quendaward-media-nginx
-    restart: unless-stopped
-    ports:
-      - "${HTTP_PORT:-8080}:80"
-    volumes:
-      - ./nginx/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
-    environment:
-      - NGINX_SERVER_NAME=${NGINX_SERVER_NAME:-_}
-    depends_on:
-      - media-app
-    networks:
-      - ea1rfi-network
+      - quendaward-network
 
 volumes:
   media_data:
 
 networks:
-  ea1rfi-network:
+  quendaward-network:
     external: true
