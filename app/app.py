@@ -196,6 +196,7 @@ def page_admin_login():
     if st.button("Login"):
         if check_password(password):
             st.session_state["admin_authenticated"] = True
+            st.session_state["page"] = "Admin Panel"
             st.rerun()
         else:
             st.error("Invalid password.")
@@ -207,6 +208,7 @@ def page_admin_panel():
 
     if st.sidebar.button("Logout"):
         st.session_state["admin_authenticated"] = False
+        st.session_state["page"] = "Gallery"
         st.rerun()
 
     tab_upload, tab_manage = st.tabs(["Upload Media", "Manage Media"])
@@ -383,13 +385,21 @@ def main():
     # Initialize session state
     if "admin_authenticated" not in st.session_state:
         st.session_state["admin_authenticated"] = False
+    if "page" not in st.session_state:
+        st.session_state["page"] = "Gallery"
 
     # Navigation
     st.sidebar.title(APP_TITLE)
     if st.session_state["admin_authenticated"]:
-        page = st.sidebar.radio("Navigation", ["Gallery", "Admin Panel"])
+        options = ["Gallery", "Admin Panel"]
     else:
-        page = st.sidebar.radio("Navigation", ["Gallery", "Admin Login"])
+        options = ["Gallery", "Admin Login"]
+
+    # Ensure stored page is valid for the current option set
+    default = options.index(st.session_state["page"]) if st.session_state["page"] in options else 0
+
+    page = st.sidebar.radio("Navigation", options, index=default, key="nav_radio")
+    st.session_state["page"] = page
 
     if page == "Gallery":
         page_gallery()
