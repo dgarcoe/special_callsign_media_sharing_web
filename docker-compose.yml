@@ -25,7 +25,9 @@ services:
     ports:
       - "${HTTP_PORT:-8080}:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    environment:
+      - NGINX_SERVER_NAME=${NGINX_SERVER_NAME:-_}
     depends_on:
       - media-app
     networks:
