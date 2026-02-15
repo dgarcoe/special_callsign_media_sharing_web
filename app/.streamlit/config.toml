@@ -2,6 +2,7 @@
 maxUploadSize = 500
 enableXsrfProtection = true
 enableCORS = false
+baseUrlPath = "quendaward_media"
 
 [browser]
 gatherUsageStats = false

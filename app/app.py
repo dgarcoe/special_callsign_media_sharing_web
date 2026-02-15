@@ -1,8 +1,13 @@
-"""Special Callsign Media Sharing - Streamlit Web Application."""
+"""Special Callsign Media Sharing - Streamlit Web Application.
+
+Integrates with Quendaward (award_planner) to read special callsign
+information and allows admins to upload/manage media for each callsign.
+"""
 
 import os
 import hashlib
 import hmac
+import base64
 
 import streamlit as st
 
@@ -29,18 +34,31 @@ def check_password(password: str) -> bool:
     return hmac.compare_digest(candidate, ADMIN_PASSWORD_HASH)
 
 
+def render_award_badge(award: dict):
+    """Render award image and metadata in the sidebar or inline."""
+    if award.get("image_data"):
+        img_b64 = base64.b64encode(award["image_data"]).decode()
+        mime = award.get("image_type", "image/png")
+        st.image(f"data:{mime};base64,{img_b64}", width=150)
+    if award.get("start_date") or award.get("end_date"):
+        dates = f"{award.get('start_date', '?')} - {award.get('end_date', '?')}"
+        st.caption(f"Active: {dates}")
+    if award.get("qrz_link"):
+        st.markdown(f"[QRZ Page]({award['qrz_link']})")
+
+
 # ──────────────────────────────────────────────
 # PUBLIC PAGES
 # ──────────────────────────────────────────────
 
 def page_gallery():
-    """Public gallery: browse all media by callsign."""
+    """Public gallery: browse all media by special callsign."""
     st.title(APP_TITLE)
     st.markdown("Browse media content organized by special callsign.")
 
     callsigns = db.get_all_callsigns()
     if not callsigns:
-        st.info("No content has been published yet. Check back later!")
+        st.info("No special callsigns have been configured in Quendaward yet.")
         return
 
     # Sidebar filters
@@ -60,16 +78,22 @@ def page_gallery():
     else:
         display_callsigns = [c for c in callsigns if c["name"] == selected_callsign]
 
+    found_any = False
     for cs in display_callsigns:
         media_items = db.get_media_by_callsign(cs["id"], media_type=selected_type)
         if not media_items:
             continue
 
-        st.header(f"{cs['name']}")
-        if cs["description"]:
-            st.caption(cs["description"])
+        found_any = True
+        col_header, col_badge = st.columns([3, 1])
+        with col_header:
+            st.header(cs["name"])
+            if cs.get("description"):
+                st.markdown(cs["description"])
+        with col_badge:
+            render_award_badge(cs)
 
-        # Group by media type for cleaner display
+        # Group by media type
         type_groups: dict[str, list] = {}
         for item in media_items:
             type_groups.setdefault(item["media_type"], []).append(item)
@@ -81,10 +105,7 @@ def page_gallery():
 
         st.divider()
 
-    if not any(
-        db.get_media_by_callsign(cs["id"], media_type=selected_type)
-        for cs in display_callsigns
-    ):
+    if not found_any:
         st.info("No media found matching the selected filters.")
 
 
@@ -148,7 +169,7 @@ def render_media_grid(items: list[dict], media_type: str):
 def page_admin_login():
     """Admin login page."""
     st.title("Admin Login")
-    st.markdown("Enter the admin password to manage content.")
+    st.markdown("Enter the admin password to manage media content.")
 
     password = st.text_input("Password", type="password")
     if st.button("Login"):
@@ -160,25 +181,20 @@ def page_admin_login():
 
 
 def page_admin_panel():
-    """Admin panel for managing callsigns and media."""
+    """Admin panel for managing media content."""
     st.title("Admin Panel")
 
     if st.sidebar.button("Logout"):
         st.session_state["admin_authenticated"] = False
         st.rerun()
 
-    tab_upload, tab_manage_media, tab_callsigns = st.tabs(
-        ["Upload Media", "Manage Media", "Manage Callsigns"]
-    )
+    tab_upload, tab_manage = st.tabs(["Upload Media", "Manage Media"])
 
     with tab_upload:
         admin_upload_media()
 
-    with tab_manage_media:
+    with tab_manage:
         admin_manage_media()
-
-    with tab_callsigns:
-        admin_manage_callsigns()
 
 
 def admin_upload_media():
@@ -187,13 +203,20 @@ def admin_upload_media():
 
     callsigns = db.get_all_callsigns()
     if not callsigns:
-        st.warning("You need to create at least one callsign before uploading media.")
-        st.markdown("Go to the **Manage Callsigns** tab to create one.")
+        st.warning(
+            "No special callsigns found in Quendaward. "
+            "Create awards in Quendaward first, then come back to upload media."
+        )
         return
 
     callsign_options = {c["name"]: c["id"] for c in callsigns}
-    selected_name = st.selectbox("Callsign", list(callsign_options.keys()))
-    callsign_id = callsign_options[selected_name]
+    selected_name = st.selectbox("Special Callsign", list(callsign_options.keys()))
+    award_id = callsign_options[selected_name]
+
+    # Show selected award info
+    award = db.get_callsign(award_id)
+    if award:
+        render_award_badge(award)
 
     title = st.text_input("Title")
     description = st.text_area("Description", height=100)
@@ -222,7 +245,7 @@ def admin_upload_media():
 
             stored_name, file_size = mu.save_uploaded_file(uploaded_file)
             db.create_media(
-                callsign_id=callsign_id,
+                award_id=award_id,
                 title=title.strip(),
                 description=description.strip(),
                 media_type=media_type,
@@ -241,7 +264,6 @@ def admin_manage_media():
     """Manage existing media items."""
     st.subheader("Manage Media")
 
-    callsigns = db.get_all_callsigns()
     type_filter = st.selectbox(
         "Filter by type",
         ["All", "Image", "Video", "Audio", "Document"],
@@ -293,70 +315,6 @@ def admin_manage_media():
                     if filename:
                         mu.delete_media_file(filename)
                     st.success("Deleted.")
-                    st.rerun()
-
-
-def admin_manage_callsigns():
-    """Manage callsigns."""
-    st.subheader("Manage Callsigns")
-
-    # Create new callsign
-    with st.form("new_callsign"):
-        st.markdown("**Add New Callsign**")
-        new_name = st.text_input("Callsign")
-        new_desc = st.text_area("Description", height=80)
-        submitted = st.form_submit_button("Add Callsign", type="primary")
-        if submitted and new_name.strip():
-            try:
-                db.create_callsign(new_name, new_desc)
-                st.success(f"Callsign {new_name.upper().strip()} created.")
-                st.rerun()
-            except Exception as e:
-                if "UNIQUE" in str(e):
-                    st.error("This callsign already exists.")
-                else:
-                    st.error(f"Error: {e}")
-
-    st.divider()
-
-    # List existing callsigns
-    callsigns = db.get_all_callsigns()
-    if not callsigns:
-        st.info("No callsigns yet.")
-        return
-
-    for cs in callsigns:
-        media_count = db.get_media_count_by_callsign(cs["id"])
-        with st.expander(f"{cs['name']} ({media_count} media items)"):
-            edit_name = st.text_input(
-                "Name", value=cs["name"], key=f"csname_{cs['id']}"
-            )
-            edit_desc = st.text_area(
-                "Description",
-                value=cs["description"] or "",
-                key=f"csdesc_{cs['id']}",
-            )
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Save", key=f"cssave_{cs['id']}"):
-                    try:
-                        db.update_callsign(cs["id"], edit_name, edit_desc)
-                        st.success("Updated.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-            with col2:
-                if st.button(
-                    "Delete callsign and all media",
-                    key=f"csdel_{cs['id']}",
-                    type="secondary",
-                ):
-                    # Delete all media files first
-                    media_items = db.get_media_by_callsign(cs["id"])
-                    for item in media_items:
-                        mu.delete_media_file(item["filename"])
-                    db.delete_callsign(cs["id"])
-                    st.success(f"Callsign {cs['name']} and all media deleted.")
                     st.rerun()
 
 

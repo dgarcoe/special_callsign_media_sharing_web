@@ -1,20 +1,42 @@
-"""Database module for media metadata storage using SQLite."""
+"""Database module for media metadata storage.
+
+Reads special callsign (award) data from Quendaward's SQLite database
+and stores media metadata in its own separate SQLite database.
+"""
 
 import sqlite3
 import os
-from datetime import datetime
 from contextlib import contextmanager
 
-DB_PATH = os.environ.get("DB_PATH", "/data/media.db")
+# Quendaward's database (read-only for award/callsign info)
+QUENDAWARD_DB_PATH = os.environ.get(
+    "QUENDAWARD_DB_PATH", "/quendaward_data/ham_coordinator.db"
+)
+
+# Media app's own database
+MEDIA_DB_PATH = os.environ.get("MEDIA_DB_PATH", "/data/media.db")
 
 
 @contextmanager
-def get_db():
-    """Context manager for database connections."""
-    conn = sqlite3.connect(DB_PATH)
+def get_quendaward_db():
+    """Read-only connection to Quendaward's database."""
+    conn = sqlite3.connect(
+        f"file:{QUENDAWARD_DB_PATH}?mode=ro", uri=True,
+        check_same_thread=False, timeout=30.0,
+    )
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
+def get_media_db():
+    """Connection to the media app's own database."""
+    conn = sqlite3.connect(MEDIA_DB_PATH, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
     try:
         yield conn
         conn.commit()
@@ -26,88 +48,61 @@ def get_db():
 
 
 def init_db():
-    """Initialize the database schema."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS callsigns (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                description TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
+    """Initialize the media database schema."""
+    os.makedirs(os.path.dirname(MEDIA_DB_PATH), exist_ok=True)
+    with get_media_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS media (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                callsign_id INTEGER NOT NULL,
+                award_id INTEGER NOT NULL,
                 title TEXT NOT NULL,
                 description TEXT,
                 media_type TEXT NOT NULL CHECK(media_type IN ('image', 'video', 'audio', 'document')),
                 filename TEXT NOT NULL,
                 original_filename TEXT NOT NULL,
                 file_size INTEGER,
-                uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
-                FOREIGN KEY (callsign_id) REFERENCES callsigns(id) ON DELETE CASCADE
+                uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
         conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_media_callsign ON media(callsign_id)
+            CREATE INDEX IF NOT EXISTS idx_media_award ON media(award_id)
         """)
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type)
         """)
 
 
-# --- Callsign operations ---
-
-def create_callsign(name: str, description: str = "") -> int:
-    """Create a new callsign entry. Returns the ID."""
-    with get_db() as conn:
-        cursor = conn.execute(
-            "INSERT INTO callsigns (name, description) VALUES (?, ?)",
-            (name.upper().strip(), description.strip()),
-        )
-        return cursor.lastrowid
-
+# --- Award/Callsign operations (read from Quendaward) ---
 
 def get_all_callsigns() -> list[dict]:
-    """Get all callsigns ordered by name."""
-    with get_db() as conn:
+    """Get all active awards (special callsigns) from Quendaward's database."""
+    with get_quendaward_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM callsigns ORDER BY name"
+            """SELECT id, name, description, start_date, end_date,
+                      image_data, image_type, qrz_link
+               FROM awards
+               WHERE is_active = 1
+               ORDER BY name"""
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def get_callsign(callsign_id: int) -> dict | None:
-    """Get a single callsign by ID."""
-    with get_db() as conn:
+def get_callsign(award_id: int) -> dict | None:
+    """Get a single award/callsign by ID from Quendaward's database."""
+    with get_quendaward_db() as conn:
         row = conn.execute(
-            "SELECT * FROM callsigns WHERE id = ?", (callsign_id,)
+            """SELECT id, name, description, start_date, end_date,
+                      image_data, image_type, qrz_link
+               FROM awards WHERE id = ?""",
+            (award_id,),
         ).fetchone()
         return dict(row) if row else None
 
 
-def update_callsign(callsign_id: int, name: str, description: str):
-    """Update callsign details."""
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE callsigns SET name = ?, description = ? WHERE id = ?",
-            (name.upper().strip(), description.strip(), callsign_id),
-        )
-
-
-def delete_callsign(callsign_id: int):
-    """Delete a callsign and all associated media records."""
-    with get_db() as conn:
-        conn.execute("DELETE FROM callsigns WHERE id = ?", (callsign_id,))
-
-
-# --- Media operations ---
+# --- Media operations (own database) ---
 
 def create_media(
-    callsign_id: int,
+    award_id: int,
     title: str,
     description: str,
     media_type: str,
@@ -116,67 +111,82 @@ def create_media(
     file_size: int,
 ) -> int:
     """Create a new media entry. Returns the ID."""
-    with get_db() as conn:
+    with get_media_db() as conn:
         cursor = conn.execute(
             """INSERT INTO media
-               (callsign_id, title, description, media_type, filename, original_filename, file_size)
+               (award_id, title, description, media_type, filename, original_filename, file_size)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (callsign_id, title.strip(), description.strip(), media_type, filename, original_filename, file_size),
+            (award_id, title.strip(), description.strip(), media_type,
+             filename, original_filename, file_size),
         )
         return cursor.lastrowid
 
 
-def get_media_by_callsign(callsign_id: int, media_type: str | None = None) -> list[dict]:
-    """Get all media for a callsign, optionally filtered by type."""
-    with get_db() as conn:
+def get_media_by_callsign(award_id: int, media_type: str | None = None) -> list[dict]:
+    """Get all media for an award/callsign, optionally filtered by type."""
+    with get_media_db() as conn:
         if media_type:
             rows = conn.execute(
-                "SELECT * FROM media WHERE callsign_id = ? AND media_type = ? ORDER BY uploaded_at DESC",
-                (callsign_id, media_type),
+                "SELECT * FROM media WHERE award_id = ? AND media_type = ? ORDER BY uploaded_at DESC",
+                (award_id, media_type),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM media WHERE callsign_id = ? ORDER BY uploaded_at DESC",
-                (callsign_id,),
+                "SELECT * FROM media WHERE award_id = ? ORDER BY uploaded_at DESC",
+                (award_id,),
             ).fetchall()
         return [dict(r) for r in rows]
 
 
 def get_all_media(media_type: str | None = None) -> list[dict]:
-    """Get all media, optionally filtered by type."""
-    with get_db() as conn:
+    """Get all media, optionally filtered by type, with callsign names resolved."""
+    # First get all media from our database
+    with get_media_db() as conn:
         if media_type:
             rows = conn.execute(
-                """SELECT m.*, c.name as callsign_name
-                   FROM media m JOIN callsigns c ON m.callsign_id = c.id
-                   WHERE m.media_type = ?
-                   ORDER BY m.uploaded_at DESC""",
+                "SELECT * FROM media WHERE media_type = ? ORDER BY uploaded_at DESC",
                 (media_type,),
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT m.*, c.name as callsign_name
-                   FROM media m JOIN callsigns c ON m.callsign_id = c.id
-                   ORDER BY m.uploaded_at DESC"""
+                "SELECT * FROM media ORDER BY uploaded_at DESC"
             ).fetchall()
-        return [dict(r) for r in rows]
+        media_items = [dict(r) for r in rows]
+
+    if not media_items:
+        return []
+
+    # Resolve callsign names from Quendaward's database
+    callsign_map = {c["id"]: c["name"] for c in get_all_callsigns()}
+    # Also try to resolve inactive awards for orphaned media
+    for item in media_items:
+        cs = callsign_map.get(item["award_id"])
+        if not cs:
+            info = get_callsign(item["award_id"])
+            cs = info["name"] if info else f"Unknown (ID {item['award_id']})"
+        item["callsign_name"] = cs
+
+    return media_items
 
 
 def get_media(media_id: int) -> dict | None:
-    """Get a single media entry by ID."""
-    with get_db() as conn:
+    """Get a single media entry by ID with callsign name resolved."""
+    with get_media_db() as conn:
         row = conn.execute(
-            """SELECT m.*, c.name as callsign_name
-               FROM media m JOIN callsigns c ON m.callsign_id = c.id
-               WHERE m.id = ?""",
-            (media_id,),
+            "SELECT * FROM media WHERE id = ?", (media_id,)
         ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        item = dict(row)
+
+    info = get_callsign(item["award_id"])
+    item["callsign_name"] = info["name"] if info else f"Unknown (ID {item['award_id']})"
+    return item
 
 
 def update_media(media_id: int, title: str, description: str):
     """Update media metadata."""
-    with get_db() as conn:
+    with get_media_db() as conn:
         conn.execute(
             "UPDATE media SET title = ?, description = ? WHERE id = ?",
             (title.strip(), description.strip(), media_id),
@@ -185,7 +195,7 @@ def update_media(media_id: int, title: str, description: str):
 
 def delete_media(media_id: int) -> str | None:
     """Delete a media entry. Returns the filename for cleanup."""
-    with get_db() as conn:
+    with get_media_db() as conn:
         row = conn.execute(
             "SELECT filename FROM media WHERE id = ?", (media_id,)
         ).fetchone()
@@ -195,11 +205,11 @@ def delete_media(media_id: int) -> str | None:
     return None
 
 
-def get_media_count_by_callsign(callsign_id: int) -> int:
-    """Get the count of media items for a callsign."""
-    with get_db() as conn:
+def get_media_count_by_callsign(award_id: int) -> int:
+    """Get the count of media items for an award/callsign."""
+    with get_media_db() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM media WHERE callsign_id = ?",
-            (callsign_id,),
+            "SELECT COUNT(*) as cnt FROM media WHERE award_id = ?",
+            (award_id,),
         ).fetchone()
         return row["cnt"]

@@ -1,34 +1,39 @@
 services:
-  app:
+  media-app:
     build:
       context: ./app
       dockerfile: Dockerfile
+    container_name: quendaward-media
     restart: unless-stopped
     volumes:
-      - app_data:/data
+      - media_data:/data
+      - ${QUENDAWARD_DATA_DIR:-./data}:/quendaward_data:ro
     environment:
-      - DB_PATH=/data/media.db
+      - QUENDAWARD_DB_PATH=/quendaward_data/ham_coordinator.db
+      - MEDIA_DB_PATH=/data/media.db
       - MEDIA_DIR=/data/media
       - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:-8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918}
       - APP_TITLE=${APP_TITLE:-Special Callsign Media Sharing}
+      - STREAMLIT_SERVER_BASE_URL_PATH=/quendaward_media
     networks:
-      - internal
+      - ea1rfi-network
 
   nginx:
     image: nginx:alpine
+    container_name: quendaward-media-nginx
     restart: unless-stopped
     ports:
-      - "${HTTP_PORT:-80}:80"
+      - "${HTTP_PORT:-8080}:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - app
+      - media-app
     networks:
-      - internal
+      - ea1rfi-network
 
 volumes:
-  app_data:
+  media_data:
 
 networks:
-  internal:
-    driver: bridge
+  ea1rfi-network:
+    external: true
