@@ -231,6 +231,8 @@ def admin_manage_groups():
 
     # --- Create new group ---
     ALL_MEDIA_TYPES = ["image", "video", "audio", "document"]
+    all_media = db.get_media_by_callsign(award_id)
+
     st.markdown("---")
     new_group_name = st.text_input("New group name", key="new_group_name")
     new_allowed = st.multiselect(
@@ -240,10 +242,31 @@ def admin_manage_groups():
         format_func=lambda t: f"{mu.MEDIA_TYPE_ICONS.get(t, '')} {t.capitalize()}",
         key="new_group_types",
     )
+
+    # Pick existing media to include in the new group
+    eligible_new = [
+        m for m in all_media
+        if m["media_type"] in (new_allowed or ALL_MEDIA_TYPES)
+    ]
+    if eligible_new:
+        pick_labels = {
+            f"{mu.MEDIA_TYPE_ICONS.get(m['media_type'], '')} {m['title']} ({m['media_type']})": m["id"]
+            for m in eligible_new
+        }
+        selected_items = st.multiselect(
+            "Include existing media in this group",
+            list(pick_labels.keys()),
+            key="new_group_items",
+        )
+    else:
+        selected_items = []
+
     if st.button("Create group", key="btn_create_group"):
         if new_group_name.strip():
             types_arg = new_allowed if len(new_allowed) < len(ALL_MEDIA_TYPES) else None
-            db.create_group(award_id, new_group_name, allowed_types=types_arg)
+            gid = db.create_group(award_id, new_group_name, allowed_types=types_arg)
+            if selected_items:
+                db.assign_media_to_group(gid, [pick_labels[l] for l in selected_items])
             st.success(f"Group '{new_group_name.strip()}' created.")
             st.rerun()
         else:
@@ -276,8 +299,10 @@ def admin_manage_groups():
     st.markdown("---")
     for g in groups:
         current_types = g["allowed_types"].split(",") if g.get("allowed_types") else ALL_MEDIA_TYPES
+        current_items = [m for m in all_media if m.get("group_id") == g["id"]]
+        item_count = len(current_items)
         types_label = ", ".join(t.capitalize() for t in current_types)
-        with st.expander(f"{g['name']}  --  {types_label}"):
+        with st.expander(f"{g['name']}  --  {types_label}  ({item_count} items)"):
             renamed = st.text_input("Name", value=g["name"], key=f"grp_name_{g['id']}")
             edited_types = st.multiselect(
                 "Allowed content types",
@@ -286,12 +311,42 @@ def admin_manage_groups():
                 format_func=lambda t: f"{mu.MEDIA_TYPE_ICONS.get(t, '')} {t.capitalize()}",
                 key=f"grp_types_{g['id']}",
             )
+
+            # Media item membership
+            eligible = [
+                m for m in all_media
+                if m["media_type"] in (edited_types or ALL_MEDIA_TYPES)
+            ]
+            item_labels = {
+                f"{mu.MEDIA_TYPE_ICONS.get(m['media_type'], '')} {m['title']} ({m['media_type']})": m["id"]
+                for m in eligible
+            }
+            current_labels = [
+                l for l, mid in item_labels.items()
+                if any(ci["id"] == mid for ci in current_items)
+            ]
+            selected_labels = st.multiselect(
+                "Media in this group",
+                list(item_labels.keys()),
+                default=current_labels,
+                key=f"grp_items_{g['id']}",
+            )
+
             col_save, col_del = st.columns(2)
             with col_save:
                 if st.button("Save", key=f"grp_save_{g['id']}"):
                     if renamed.strip():
                         types_arg = edited_types if len(edited_types) < len(ALL_MEDIA_TYPES) else None
                         db.update_group(g["id"], renamed, allowed_types=types_arg)
+                        # Compute membership changes
+                        new_ids = {item_labels[l] for l in selected_labels}
+                        old_ids = {m["id"] for m in current_items}
+                        to_add = new_ids - old_ids
+                        to_remove = old_ids - new_ids
+                        if to_add:
+                            db.assign_media_to_group(g["id"], list(to_add))
+                        if to_remove:
+                            db.assign_media_to_group(None, list(to_remove))
                         st.success("Group updated.")
                         st.rerun()
             with col_del:

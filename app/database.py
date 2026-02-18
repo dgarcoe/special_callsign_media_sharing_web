@@ -201,6 +201,16 @@ def delete_group(group_id: int):
         conn.execute("DELETE FROM media_groups WHERE id = ?", (group_id,))
 
 
+def assign_media_to_group(group_id: int | None, media_ids: list[int]):
+    """Batch-assign media items to a group (or ungroup them when group_id is None)."""
+    with get_media_db() as conn:
+        for mid in media_ids:
+            conn.execute(
+                "UPDATE media SET group_id = ? WHERE id = ?",
+                (group_id, mid),
+            )
+
+
 def update_group_order(group_ids: list[int]):
     """Persist a new sort order for groups."""
     with get_media_db() as conn:
