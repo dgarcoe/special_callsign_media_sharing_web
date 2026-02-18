@@ -92,6 +92,11 @@ def init_db():
             conn.execute("ALTER TABLE media ADD COLUMN group_id INTEGER REFERENCES media_groups(id) ON DELETE SET NULL")
         except Exception:
             pass  # Column already exists
+        # Migration: add allowed_types column to media_groups
+        try:
+            conn.execute("ALTER TABLE media_groups ADD COLUMN allowed_types TEXT")
+        except Exception:
+            pass  # Column already exists
 
 
 # --- Authentication (read from Quendaward) ---
@@ -149,8 +154,13 @@ def get_callsign(award_id: int) -> dict | None:
 
 # --- Group operations (own database) ---
 
-def create_group(award_id: int, name: str) -> int:
-    """Create a new media group for an award. Returns the group ID."""
+def create_group(award_id: int, name: str, allowed_types: list[str] | None = None) -> int:
+    """Create a new media group for an award. Returns the group ID.
+
+    ``allowed_types`` is an optional list like ``["image", "video"]``.
+    ``None`` means all types are allowed.
+    """
+    types_csv = ",".join(allowed_types) if allowed_types else None
     with get_media_db() as conn:
         # Place new group at the end
         row = conn.execute(
@@ -158,8 +168,8 @@ def create_group(award_id: int, name: str) -> int:
             (award_id,),
         ).fetchone()
         cursor = conn.execute(
-            "INSERT INTO media_groups (award_id, name, sort_order) VALUES (?, ?, ?)",
-            (award_id, name.strip(), row["next_pos"]),
+            "INSERT INTO media_groups (award_id, name, sort_order, allowed_types) VALUES (?, ?, ?, ?)",
+            (award_id, name.strip(), row["next_pos"], types_csv),
         )
         return cursor.lastrowid
 
@@ -174,12 +184,13 @@ def get_groups_by_callsign(award_id: int) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def rename_group(group_id: int, name: str):
-    """Rename a media group."""
+def update_group(group_id: int, name: str, allowed_types: list[str] | None = None):
+    """Update a media group's name and allowed types."""
+    types_csv = ",".join(allowed_types) if allowed_types else None
     with get_media_db() as conn:
         conn.execute(
-            "UPDATE media_groups SET name = ? WHERE id = ?",
-            (name.strip(), group_id),
+            "UPDATE media_groups SET name = ?, allowed_types = ? WHERE id = ?",
+            (name.strip(), types_csv, group_id),
         )
 
 

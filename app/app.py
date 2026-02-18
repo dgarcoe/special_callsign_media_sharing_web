@@ -65,9 +65,26 @@ def page_gallery():
     else:
         display_callsigns = [c for c in callsigns if c["name"] == selected_callsign]
 
+    # Group filter -- collect groups across displayed callsigns
+    all_groups_for_filter: list[dict] = []
+    for cs in display_callsigns:
+        all_groups_for_filter.extend(db.get_groups_by_callsign(cs["id"]))
+    group_filter_names = ["All groups"] + [g["name"] for g in all_groups_for_filter]
+    selected_group_filter = st.sidebar.selectbox("Group", group_filter_names)
+
+    # Resolve selected group ID (None = show all)
+    if selected_group_filter == "All groups":
+        filter_group_id = None
+    else:
+        match = next((g for g in all_groups_for_filter if g["name"] == selected_group_filter), None)
+        filter_group_id = match["id"] if match else None
+
     found_any = False
     for cs in display_callsigns:
         media_items = db.get_media_by_callsign(cs["id"], media_type=selected_type)
+        # Apply group filter
+        if filter_group_id is not None:
+            media_items = [i for i in media_items if i.get("group_id") == filter_group_id]
         if not media_items:
             continue
 
@@ -213,20 +230,24 @@ def admin_manage_groups():
     award_id = callsign_options[selected_name]
 
     # --- Create new group ---
+    ALL_MEDIA_TYPES = ["image", "video", "audio", "document"]
     st.markdown("---")
-    col_new, col_btn = st.columns([3, 1])
-    with col_new:
-        new_group_name = st.text_input("New group name", key="new_group_name")
-    with col_btn:
-        st.markdown("")  # spacer
-        st.markdown("")
-        if st.button("Create group", key="btn_create_group"):
-            if new_group_name.strip():
-                db.create_group(award_id, new_group_name)
-                st.success(f"Group '{new_group_name.strip()}' created.")
-                st.rerun()
-            else:
-                st.error("Group name cannot be empty.")
+    new_group_name = st.text_input("New group name", key="new_group_name")
+    new_allowed = st.multiselect(
+        "Allowed content types",
+        ALL_MEDIA_TYPES,
+        default=ALL_MEDIA_TYPES,
+        format_func=lambda t: f"{mu.MEDIA_TYPE_ICONS.get(t, '')} {t.capitalize()}",
+        key="new_group_types",
+    )
+    if st.button("Create group", key="btn_create_group"):
+        if new_group_name.strip():
+            types_arg = new_allowed if len(new_allowed) < len(ALL_MEDIA_TYPES) else None
+            db.create_group(award_id, new_group_name, allowed_types=types_arg)
+            st.success(f"Group '{new_group_name.strip()}' created.")
+            st.rerun()
+        else:
+            st.error("Group name cannot be empty.")
 
     # --- List existing groups ---
     groups = db.get_groups_by_callsign(award_id)
@@ -251,25 +272,33 @@ def admin_manage_groups():
         st.success("Group order saved.")
         st.rerun()
 
-    # Rename / delete individual groups
+    # Edit / delete individual groups
     st.markdown("---")
     for g in groups:
-        col_name, col_save, col_del = st.columns([3, 1, 1])
-        with col_name:
-            renamed = st.text_input(
-                "Name", value=g["name"], key=f"grp_name_{g['id']}", label_visibility="collapsed"
+        current_types = g["allowed_types"].split(",") if g.get("allowed_types") else ALL_MEDIA_TYPES
+        types_label = ", ".join(t.capitalize() for t in current_types)
+        with st.expander(f"{g['name']}  --  {types_label}"):
+            renamed = st.text_input("Name", value=g["name"], key=f"grp_name_{g['id']}")
+            edited_types = st.multiselect(
+                "Allowed content types",
+                ALL_MEDIA_TYPES,
+                default=current_types,
+                format_func=lambda t: f"{mu.MEDIA_TYPE_ICONS.get(t, '')} {t.capitalize()}",
+                key=f"grp_types_{g['id']}",
             )
-        with col_save:
-            if st.button("Rename", key=f"grp_rename_{g['id']}"):
-                if renamed.strip():
-                    db.rename_group(g["id"], renamed)
-                    st.success("Renamed.")
+            col_save, col_del = st.columns(2)
+            with col_save:
+                if st.button("Save", key=f"grp_save_{g['id']}"):
+                    if renamed.strip():
+                        types_arg = edited_types if len(edited_types) < len(ALL_MEDIA_TYPES) else None
+                        db.update_group(g["id"], renamed, allowed_types=types_arg)
+                        st.success("Group updated.")
+                        st.rerun()
+            with col_del:
+                if st.button("Delete", key=f"grp_del_{g['id']}"):
+                    db.delete_group(g["id"])
+                    st.success("Group deleted. Its media items are now ungrouped.")
                     st.rerun()
-        with col_del:
-            if st.button("Delete", key=f"grp_del_{g['id']}"):
-                db.delete_group(g["id"])
-                st.success(f"Group deleted. Its media items are now ungrouped.")
-                st.rerun()
 
 
 def admin_reorder_media():
@@ -414,13 +443,21 @@ def admin_upload_media():
     if award:
         render_award_badge(award)
 
-    # Group selector
+    # Group selector (filtered to groups that allow the uploaded types)
     groups = db.get_groups_by_callsign(award_id)
     group_options = {"(No group)": None}
     for g in groups:
         group_options[g["name"]] = g["id"]
     selected_group_name = st.selectbox("Group / Folder", list(group_options.keys()))
     selected_group_id = group_options[selected_group_name]
+
+    # Show which types the selected group accepts
+    if selected_group_id is not None:
+        sel_group = next((g for g in groups if g["id"] == selected_group_id), None)
+        if sel_group and sel_group.get("allowed_types"):
+            allowed = sel_group["allowed_types"].split(",")
+            labels = ", ".join(f"{mu.MEDIA_TYPE_ICONS.get(t, '')} {t.capitalize()}" for t in allowed)
+            st.caption(f"This group accepts: {labels}")
 
     all_extensions = []
     for exts in mu.ALLOWED_EXTENSIONS.values():
@@ -472,6 +509,19 @@ def admin_upload_media():
         if not all_valid:
             st.error("Every file needs a title.")
             return
+
+        # Validate types against selected group
+        if selected_group_id is not None:
+            sel_group = next((g for g in groups if g["id"] == selected_group_id), None)
+            if sel_group and sel_group.get("allowed_types"):
+                allowed = set(sel_group["allowed_types"].split(","))
+                rejected = [m["file"].name for m in file_metadata if m["media_type"] not in allowed]
+                if rejected:
+                    st.error(
+                        f"The group '{sel_group['name']}' does not accept these file types: "
+                        + ", ".join(rejected)
+                    )
+                    return
 
         success_count = 0
         for meta in file_metadata:
@@ -536,10 +586,13 @@ def admin_manage_media():
                     value=item["description"] or "",
                     key=f"desc_{item['id']}",
                 )
-                # Group reassignment
+                # Group reassignment (only show groups compatible with this item's type)
                 item_groups = groups_by_award.get(item["award_id"], [])
                 group_opts = {"(No group)": None}
                 for g in item_groups:
+                    if g.get("allowed_types"):
+                        if item["media_type"] not in g["allowed_types"].split(","):
+                            continue
                     group_opts[g["name"]] = g["id"]
                 current_group_idx = 0
                 for idx, (_, gid) in enumerate(group_opts.items()):
