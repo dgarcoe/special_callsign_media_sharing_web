@@ -174,6 +174,48 @@ def render_media_grid(items: list[dict], media_type: str):
 # ADMIN PAGES
 # ──────────────────────────────────────────────
 
+def admin_reorder_media():
+    """Drag-and-drop reordering of media items per callsign."""
+    from streamlit_sortables import sort_items
+
+    st.subheader("Reorder Media")
+
+    callsigns = db.get_all_callsigns()
+    if not callsigns:
+        st.info("No callsigns configured in Quendaward.")
+        return
+
+    callsign_options = {c["name"]: c["id"] for c in callsigns}
+    selected_name = st.selectbox(
+        "Select callsign", list(callsign_options.keys()), key="reorder_callsign"
+    )
+    award_id = callsign_options[selected_name]
+
+    media_items = db.get_media_by_callsign(award_id)
+    if not media_items:
+        st.info("No media uploaded for this callsign yet.")
+        return
+
+    # Encode ID into the label so we can recover order after drag
+    labels = [
+        f"{mu.MEDIA_TYPE_ICONS.get(item['media_type'], '')} [{item['id']}] {item['title']}"
+        for item in media_items
+    ]
+
+    st.markdown("Drag items into the desired order, then click **Save order**.")
+    new_labels = sort_items(labels, direction="vertical", key=f"sort_{award_id}")
+
+    if st.button("Save order", key="btn_save_order", type="primary"):
+        import re
+        new_ids = []
+        for label in new_labels:
+            m = re.search(r"\[(\d+)\]", label)
+            if m:
+                new_ids.append(int(m.group(1)))
+        db.update_media_order(new_ids)
+        st.success("Order saved.")
+
+
 def page_admin_login():
     """Admin login page using Quendaward operator credentials."""
     st.title("Admin Login")
@@ -213,13 +255,16 @@ def page_admin_panel():
         st.session_state["page"] = "Gallery"
         st.rerun()
 
-    tab_upload, tab_manage = st.tabs(["Upload Media", "Manage Media"])
+    tab_upload, tab_manage, tab_reorder = st.tabs(["Upload Media", "Manage Media", "Reorder"])
 
     with tab_upload:
         admin_upload_media()
 
     with tab_manage:
         admin_manage_media()
+
+    with tab_reorder:
+        admin_reorder_media()
 
 
 def admin_upload_media():

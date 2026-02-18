@@ -70,6 +70,11 @@ def init_db():
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type)
         """)
+        # Migration: add sort_order column if it doesn't exist yet
+        try:
+            conn.execute("ALTER TABLE media ADD COLUMN sort_order INTEGER")
+        except Exception:
+            pass  # Column already exists
 
 
 # --- Authentication (read from Quendaward) ---
@@ -153,12 +158,14 @@ def get_media_by_callsign(award_id: int, media_type: str | None = None) -> list[
     with get_media_db() as conn:
         if media_type:
             rows = conn.execute(
-                "SELECT * FROM media WHERE award_id = ? AND media_type = ? ORDER BY uploaded_at DESC",
+                """SELECT * FROM media WHERE award_id = ? AND media_type = ?
+                   ORDER BY COALESCE(sort_order, 999999) ASC, uploaded_at DESC""",
                 (award_id, media_type),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM media WHERE award_id = ? ORDER BY uploaded_at DESC",
+                """SELECT * FROM media WHERE award_id = ?
+                   ORDER BY COALESCE(sort_order, 999999) ASC, uploaded_at DESC""",
                 (award_id,),
             ).fetchall()
         return [dict(r) for r in rows]
@@ -208,6 +215,20 @@ def get_media(media_id: int) -> dict | None:
     info = get_callsign(item["award_id"])
     item["callsign_name"] = info["name"] if info else f"Unknown (ID {item['award_id']})"
     return item
+
+
+def update_media_order(media_ids: list[int]):
+    """Persist a new sort order for a list of media items.
+
+    ``media_ids`` is the ordered list of IDs as the admin arranged them.
+    Items are assigned sort_order 1, 2, 3, … in that sequence.
+    """
+    with get_media_db() as conn:
+        for position, media_id in enumerate(media_ids, start=1):
+            conn.execute(
+                "UPDATE media SET sort_order = ? WHERE id = ?",
+                (position, media_id),
+            )
 
 
 def update_media(media_id: int, title: str, description: str):
