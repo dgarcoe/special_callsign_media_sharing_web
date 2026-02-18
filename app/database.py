@@ -75,6 +75,23 @@ def init_db():
             conn.execute("ALTER TABLE media ADD COLUMN sort_order INTEGER")
         except Exception:
             pass  # Column already exists
+        # Media groups table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS media_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                award_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                sort_order INTEGER
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_groups_award ON media_groups(award_id)
+        """)
+        # Migration: add group_id column to media
+        try:
+            conn.execute("ALTER TABLE media ADD COLUMN group_id INTEGER REFERENCES media_groups(id) ON DELETE SET NULL")
+        except Exception:
+            pass  # Column already exists
 
 
 # --- Authentication (read from Quendaward) ---
@@ -130,6 +147,59 @@ def get_callsign(award_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+# --- Group operations (own database) ---
+
+def create_group(award_id: int, name: str) -> int:
+    """Create a new media group for an award. Returns the group ID."""
+    with get_media_db() as conn:
+        # Place new group at the end
+        row = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_pos FROM media_groups WHERE award_id = ?",
+            (award_id,),
+        ).fetchone()
+        cursor = conn.execute(
+            "INSERT INTO media_groups (award_id, name, sort_order) VALUES (?, ?, ?)",
+            (award_id, name.strip(), row["next_pos"]),
+        )
+        return cursor.lastrowid
+
+
+def get_groups_by_callsign(award_id: int) -> list[dict]:
+    """Get all groups for a callsign, ordered by sort_order."""
+    with get_media_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM media_groups WHERE award_id = ? ORDER BY COALESCE(sort_order, 999999) ASC, id ASC",
+            (award_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def rename_group(group_id: int, name: str):
+    """Rename a media group."""
+    with get_media_db() as conn:
+        conn.execute(
+            "UPDATE media_groups SET name = ? WHERE id = ?",
+            (name.strip(), group_id),
+        )
+
+
+def delete_group(group_id: int):
+    """Delete a group. Media in this group become ungrouped (group_id → NULL)."""
+    with get_media_db() as conn:
+        conn.execute("UPDATE media SET group_id = NULL WHERE group_id = ?", (group_id,))
+        conn.execute("DELETE FROM media_groups WHERE id = ?", (group_id,))
+
+
+def update_group_order(group_ids: list[int]):
+    """Persist a new sort order for groups."""
+    with get_media_db() as conn:
+        for position, gid in enumerate(group_ids, start=1):
+            conn.execute(
+                "UPDATE media_groups SET sort_order = ? WHERE id = ?",
+                (position, gid),
+            )
+
+
 # --- Media operations (own database) ---
 
 def create_media(
@@ -140,15 +210,16 @@ def create_media(
     filename: str,
     original_filename: str,
     file_size: int,
+    group_id: int | None = None,
 ) -> int:
     """Create a new media entry. Returns the ID."""
     with get_media_db() as conn:
         cursor = conn.execute(
             """INSERT INTO media
-               (award_id, title, description, media_type, filename, original_filename, file_size)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (award_id, title, description, media_type, filename, original_filename, file_size, group_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (award_id, title.strip(), description.strip(), media_type,
-             filename, original_filename, file_size),
+             filename, original_filename, file_size, group_id),
         )
         return cursor.lastrowid
 
@@ -231,12 +302,12 @@ def update_media_order(media_ids: list[int]):
             )
 
 
-def update_media(media_id: int, title: str, description: str):
+def update_media(media_id: int, title: str, description: str, group_id: int | None = None):
     """Update media metadata."""
     with get_media_db() as conn:
         conn.execute(
-            "UPDATE media SET title = ?, description = ? WHERE id = ?",
-            (title.strip(), description.strip(), media_id),
+            "UPDATE media SET title = ?, description = ?, group_id = ? WHERE id = ?",
+            (title.strip(), description.strip(), group_id, media_id),
         )
 
 

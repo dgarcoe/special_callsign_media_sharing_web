@@ -80,15 +80,35 @@ def page_gallery():
         with col_badge:
             render_award_badge(cs)
 
-        # Group by media type
-        type_groups: dict[str, list] = {}
+        # Organise items by group, then by media type within each group
+        groups = db.get_groups_by_callsign(cs["id"])
+        group_map: dict[int | None, list[dict]] = {}
         for item in media_items:
-            type_groups.setdefault(item["media_type"], []).append(item)
+            group_map.setdefault(item.get("group_id"), []).append(item)
 
-        for mtype, items in type_groups.items():
-            icon = mu.MEDIA_TYPE_ICONS.get(mtype, "")
-            st.subheader(f"{icon} {mtype.capitalize()}s")
-            render_media_grid(items, mtype)
+        # Render grouped items first (in group sort order), then ungrouped
+        rendered_groups = [(g["id"], g["name"]) for g in groups if g["id"] in group_map]
+        if None in group_map:
+            rendered_groups.append((None, "Other"))
+
+        for gid, gname in rendered_groups:
+            items_in_group = group_map[gid]
+            if gid is not None:
+                st.subheader(gname)
+
+            # Sub-group by media type within this group
+            type_groups: dict[str, list] = {}
+            for item in items_in_group:
+                type_groups.setdefault(item["media_type"], []).append(item)
+
+            for mtype, items in type_groups.items():
+                icon = mu.MEDIA_TYPE_ICONS.get(mtype, "")
+                label = f"{icon} {mtype.capitalize()}s"
+                if gid is None and len(rendered_groups) > 1:
+                    st.subheader(label)
+                else:
+                    st.markdown(f"**{label}**")
+                render_media_grid(items, mtype)
 
         # Download all media for this callsign as ZIP
         zip_data = mu.build_zip(media_items)
@@ -174,9 +194,88 @@ def render_media_grid(items: list[dict], media_type: str):
 # ADMIN PAGES
 # ──────────────────────────────────────────────
 
-def admin_reorder_media():
-    """Drag-and-drop reordering of media items per callsign."""
+def admin_manage_groups():
+    """Create, rename, reorder, and delete media groups per callsign."""
     from streamlit_sortables import sort_items
+    import re
+
+    st.subheader("Manage Groups")
+
+    callsigns = db.get_all_callsigns()
+    if not callsigns:
+        st.info("No callsigns configured in Quendaward.")
+        return
+
+    callsign_options = {c["name"]: c["id"] for c in callsigns}
+    selected_name = st.selectbox(
+        "Select callsign", list(callsign_options.keys()), key="groups_callsign"
+    )
+    award_id = callsign_options[selected_name]
+
+    # --- Create new group ---
+    st.markdown("---")
+    col_new, col_btn = st.columns([3, 1])
+    with col_new:
+        new_group_name = st.text_input("New group name", key="new_group_name")
+    with col_btn:
+        st.markdown("")  # spacer
+        st.markdown("")
+        if st.button("Create group", key="btn_create_group"):
+            if new_group_name.strip():
+                db.create_group(award_id, new_group_name)
+                st.success(f"Group '{new_group_name.strip()}' created.")
+                st.rerun()
+            else:
+                st.error("Group name cannot be empty.")
+
+    # --- List existing groups ---
+    groups = db.get_groups_by_callsign(award_id)
+    if not groups:
+        st.info("No groups yet. Create one above.")
+        return
+
+    st.markdown("---")
+
+    # Drag-and-drop group ordering
+    labels = [f"[{g['id']}] {g['name']}" for g in groups]
+    st.markdown("Drag groups to reorder, then click **Save group order**.")
+    new_labels = sort_items(labels, direction="vertical", key=f"gsort_{award_id}")
+
+    if st.button("Save group order", key="btn_save_group_order", type="primary"):
+        new_ids = []
+        for label in new_labels:
+            m = re.search(r"\[(\d+)\]", label)
+            if m:
+                new_ids.append(int(m.group(1)))
+        db.update_group_order(new_ids)
+        st.success("Group order saved.")
+        st.rerun()
+
+    # Rename / delete individual groups
+    st.markdown("---")
+    for g in groups:
+        col_name, col_save, col_del = st.columns([3, 1, 1])
+        with col_name:
+            renamed = st.text_input(
+                "Name", value=g["name"], key=f"grp_name_{g['id']}", label_visibility="collapsed"
+            )
+        with col_save:
+            if st.button("Rename", key=f"grp_rename_{g['id']}"):
+                if renamed.strip():
+                    db.rename_group(g["id"], renamed)
+                    st.success("Renamed.")
+                    st.rerun()
+        with col_del:
+            if st.button("Delete", key=f"grp_del_{g['id']}"):
+                db.delete_group(g["id"])
+                st.success(f"Group deleted. Its media items are now ungrouped.")
+                st.rerun()
+
+
+def admin_reorder_media():
+    """Drag-and-drop reordering of media items per callsign and group."""
+    from streamlit_sortables import sort_items
+    import re
 
     st.subheader("Reorder Media")
 
@@ -196,17 +295,39 @@ def admin_reorder_media():
         st.info("No media uploaded for this callsign yet.")
         return
 
-    # Encode ID into the label so we can recover order after drag
+    # Let admin choose which group to reorder (or all items)
+    groups = db.get_groups_by_callsign(award_id)
+    scope_options = {"All items": None}
+    for g in groups:
+        scope_options[g["name"]] = g["id"]
+    has_ungrouped = any(item.get("group_id") is None for item in media_items)
+    if has_ungrouped and groups:
+        scope_options["(Ungrouped)"] = "ungrouped"
+
+    scope_name = st.selectbox("Group", list(scope_options.keys()), key="reorder_scope")
+    scope_val = scope_options[scope_name]
+
+    # Filter items by scope
+    if scope_val is None:
+        filtered = media_items
+    elif scope_val == "ungrouped":
+        filtered = [i for i in media_items if i.get("group_id") is None]
+    else:
+        filtered = [i for i in media_items if i.get("group_id") == scope_val]
+
+    if not filtered:
+        st.info("No items in this group.")
+        return
+
     labels = [
         f"{mu.MEDIA_TYPE_ICONS.get(item['media_type'], '')} [{item['id']}] {item['title']}"
-        for item in media_items
+        for item in filtered
     ]
 
     st.markdown("Drag items into the desired order, then click **Save order**.")
-    new_labels = sort_items(labels, direction="vertical", key=f"sort_{award_id}")
+    new_labels = sort_items(labels, direction="vertical", key=f"sort_{award_id}_{scope_val}")
 
     if st.button("Save order", key="btn_save_order", type="primary"):
-        import re
         new_ids = []
         for label in new_labels:
             m = re.search(r"\[(\d+)\]", label)
@@ -255,13 +376,18 @@ def page_admin_panel():
         st.session_state["page"] = "Gallery"
         st.rerun()
 
-    tab_upload, tab_manage, tab_reorder = st.tabs(["Upload Media", "Manage Media", "Reorder"])
+    tab_upload, tab_manage, tab_groups, tab_reorder = st.tabs(
+        ["Upload Media", "Manage Media", "Groups", "Reorder"]
+    )
 
     with tab_upload:
         admin_upload_media()
 
     with tab_manage:
         admin_manage_media()
+
+    with tab_groups:
+        admin_manage_groups()
 
     with tab_reorder:
         admin_reorder_media()
@@ -287,6 +413,14 @@ def admin_upload_media():
     award = db.get_callsign(award_id)
     if award:
         render_award_badge(award)
+
+    # Group selector
+    groups = db.get_groups_by_callsign(award_id)
+    group_options = {"(No group)": None}
+    for g in groups:
+        group_options[g["name"]] = g["id"]
+    selected_group_name = st.selectbox("Group / Folder", list(group_options.keys()))
+    selected_group_id = group_options[selected_group_name]
 
     all_extensions = []
     for exts in mu.ALLOWED_EXTENSIONS.values():
@@ -350,6 +484,7 @@ def admin_upload_media():
                 filename=stored_name,
                 original_filename=meta["file"].name,
                 file_size=file_size,
+                group_id=selected_group_id,
             )
             success_count += 1
 
@@ -374,10 +509,22 @@ def admin_manage_media():
         st.info("No media found.")
         return
 
+    # Build a lookup of groups across all callsigns for the manage view
+    all_callsign_ids = {item["award_id"] for item in media_items}
+    groups_by_award: dict[int, list[dict]] = {}
+    for aid in all_callsign_ids:
+        groups_by_award[aid] = db.get_groups_by_callsign(aid)
+
     for item in media_items:
         icon = mu.MEDIA_TYPE_ICONS.get(item["media_type"], "")
+        group_label = ""
+        if item.get("group_id"):
+            for g in groups_by_award.get(item["award_id"], []):
+                if g["id"] == item["group_id"]:
+                    group_label = f" [{g['name']}]"
+                    break
         with st.expander(
-            f"{icon} {item['title']} — {item['callsign_name']} ({item['media_type']})"
+            f"{icon} {item['title']} — {item['callsign_name']}{group_label} ({item['media_type']})"
         ):
             col1, col2 = st.columns([2, 1])
             with col1:
@@ -389,8 +536,24 @@ def admin_manage_media():
                     value=item["description"] or "",
                     key=f"desc_{item['id']}",
                 )
+                # Group reassignment
+                item_groups = groups_by_award.get(item["award_id"], [])
+                group_opts = {"(No group)": None}
+                for g in item_groups:
+                    group_opts[g["name"]] = g["id"]
+                current_group_idx = 0
+                for idx, (_, gid) in enumerate(group_opts.items()):
+                    if gid == item.get("group_id"):
+                        current_group_idx = idx
+                        break
+                new_group_name = st.selectbox(
+                    "Group", list(group_opts.keys()),
+                    index=current_group_idx, key=f"group_{item['id']}",
+                )
+                new_group_id = group_opts[new_group_name]
+
                 if st.button("Save changes", key=f"save_{item['id']}"):
-                    db.update_media(item["id"], new_title, new_desc)
+                    db.update_media(item["id"], new_title, new_desc, group_id=new_group_id)
                     st.success("Updated.")
                     st.rerun()
             with col2:
