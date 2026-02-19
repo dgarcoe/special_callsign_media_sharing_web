@@ -422,41 +422,28 @@ def admin_reorder_media():
 
 
 def page_admin_login():
-    """Admin login page using Quendaward operator credentials."""
+    """Admin login page."""
     st.title("Admin Login")
-    st.markdown("Log in with your Quendaward admin callsign and password.")
 
-    callsign = st.text_input("Callsign")
+    username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
-        if not callsign.strip() or not password:
-            st.error("Both callsign and password are required.")
+        if not username.strip() or not password:
+            st.error("Both username and password are required.")
+        elif db.authenticate_admin(username, password):
+            st.session_state["admin_authenticated"] = True
+            st.session_state["page"] = "Admin Panel"
+            st.rerun()
         else:
-            operator = db.authenticate_admin(callsign, password)
-            if operator:
-                st.session_state["admin_authenticated"] = True
-                st.session_state["admin_callsign"] = operator["callsign"]
-                st.session_state["admin_name"] = operator["operator_name"]
-                st.session_state["page"] = "Admin Panel"
-                st.rerun()
-            else:
-                st.error("Invalid credentials or insufficient permissions.")
+            st.error("Invalid credentials.")
 
 
 def page_admin_panel():
     """Admin panel for managing media content."""
     st.title("Admin Panel")
 
-    admin_cs = st.session_state.get("admin_callsign", "")
-    admin_name = st.session_state.get("admin_name", "")
-    if admin_cs:
-        label = f"{admin_name} ({admin_cs})" if admin_name else admin_cs
-        st.sidebar.markdown(f"Logged in as **{label}**")
-
     if st.sidebar.button("Logout"):
         st.session_state["admin_authenticated"] = False
-        st.session_state.pop("admin_callsign", None)
-        st.session_state.pop("admin_name", None)
         st.session_state["page"] = "Gallery"
         st.rerun()
 

@@ -99,30 +99,21 @@ def init_db():
             pass  # Column already exists
 
 
-# --- Authentication (read from Quendaward) ---
+# --- Authentication (standalone, env-var based) ---
 
-def authenticate_admin(callsign: str, password: str) -> dict | None:
-    """Authenticate an admin operator against Quendaward's operators table.
+_ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+_ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
-    Returns the operator dict (callsign, operator_name) on success, None on failure.
+
+def authenticate_admin(username: str, password: str) -> bool:
+    """Authenticate against the ADMIN_USERNAME / ADMIN_PASSWORD env vars.
+
+    Returns True on success, False on failure.
     """
-    import bcrypt
-
-    callsign = callsign.strip().upper()
-    with get_quendaward_db() as conn:
-        row = conn.execute(
-            "SELECT callsign, operator_name, password_hash, is_admin FROM operators WHERE callsign = ?",
-            (callsign,),
-        ).fetchone()
-
-    if not row:
-        return None
-    if not row["is_admin"]:
-        return None
-    if not bcrypt.checkpw(password.encode(), row["password_hash"].encode()):
-        return None
-
-    return {"callsign": row["callsign"], "operator_name": row["operator_name"]}
+    if not _ADMIN_PASSWORD:
+        # No password configured – deny all access to prevent open installs
+        return False
+    return username.strip() == _ADMIN_USERNAME and password == _ADMIN_PASSWORD
 
 
 # --- Award/Callsign operations (read from Quendaward) ---

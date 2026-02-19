@@ -14,6 +14,8 @@ services:
       - MEDIA_DIR=/data/media
       - APP_TITLE=${APP_TITLE:-Special Callsign Media Sharing}
       - STREAMLIT_SERVER_BASE_URL_PATH=/quendaward_media
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     networks:
       - quendaward-network
 
