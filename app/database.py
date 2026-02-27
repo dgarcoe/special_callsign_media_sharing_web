@@ -51,31 +51,7 @@ def init_db():
     """Initialize the media database schema."""
     os.makedirs(os.path.dirname(MEDIA_DB_PATH), exist_ok=True)
     with get_media_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS media (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                award_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT,
-                media_type TEXT NOT NULL CHECK(media_type IN ('image', 'video', 'audio', 'document')),
-                filename TEXT NOT NULL,
-                original_filename TEXT NOT NULL,
-                file_size INTEGER,
-                uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_media_award ON media(award_id)
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type)
-        """)
-        # Migration: add sort_order column if it doesn't exist yet
-        try:
-            conn.execute("ALTER TABLE media ADD COLUMN sort_order INTEGER")
-        except Exception:
-            pass  # Column already exists
-        # Media groups table
+        # Groups table must exist before media (media references it)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS media_groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,16 +63,78 @@ def init_db():
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_groups_award ON media_groups(award_id)
         """)
-        # Migration: add group_id column to media
-        try:
-            conn.execute("ALTER TABLE media ADD COLUMN group_id INTEGER REFERENCES media_groups(id) ON DELETE SET NULL")
-        except Exception:
-            pass  # Column already exists
         # Migration: add allowed_types column to media_groups
         try:
             conn.execute("ALTER TABLE media_groups ADD COLUMN allowed_types TEXT")
         except Exception:
             pass  # Column already exists
+
+        # Check current state of media table
+        table_info = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='media'"
+        ).fetchone()
+
+        if table_info is None:
+            # Fresh install – create with full schema including youtube
+            conn.execute("""
+                CREATE TABLE media (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    award_id INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    media_type TEXT NOT NULL CHECK(media_type IN ('image', 'video', 'audio', 'document', 'youtube')),
+                    filename TEXT NOT NULL DEFAULT '',
+                    original_filename TEXT NOT NULL DEFAULT '',
+                    file_size INTEGER,
+                    uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    sort_order INTEGER,
+                    group_id INTEGER REFERENCES media_groups(id) ON DELETE SET NULL,
+                    youtube_url TEXT
+                )
+            """)
+        else:
+            # Existing table – run column migrations
+            for migration in [
+                "ALTER TABLE media ADD COLUMN sort_order INTEGER",
+                "ALTER TABLE media ADD COLUMN group_id INTEGER REFERENCES media_groups(id) ON DELETE SET NULL",
+                "ALTER TABLE media ADD COLUMN youtube_url TEXT",
+            ]:
+                try:
+                    conn.execute(migration)
+                except Exception:
+                    pass  # Column already exists
+
+            # Migration: update CHECK constraint to include 'youtube' via table recreation
+            current_sql = table_info["sql"] or ""
+            if "'youtube'" not in current_sql:
+                conn.execute("""
+                    CREATE TABLE media_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        award_id INTEGER NOT NULL,
+                        title TEXT NOT NULL,
+                        description TEXT,
+                        media_type TEXT NOT NULL CHECK(media_type IN ('image', 'video', 'audio', 'document', 'youtube')),
+                        filename TEXT NOT NULL DEFAULT '',
+                        original_filename TEXT NOT NULL DEFAULT '',
+                        file_size INTEGER,
+                        uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        sort_order INTEGER,
+                        group_id INTEGER REFERENCES media_groups(id) ON DELETE SET NULL,
+                        youtube_url TEXT
+                    )
+                """)
+                conn.execute("""
+                    INSERT INTO media_new
+                    SELECT id, award_id, title, description, media_type,
+                           COALESCE(filename, ''), COALESCE(original_filename, ''),
+                           file_size, uploaded_at, sort_order, group_id, youtube_url
+                    FROM media
+                """)
+                conn.execute("DROP TABLE media")
+                conn.execute("ALTER TABLE media_new RENAME TO media")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_media_award ON media(award_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type)")
 
 
 # --- Authentication (standalone, env-var based) ---
@@ -223,15 +261,16 @@ def create_media(
     original_filename: str,
     file_size: int,
     group_id: int | None = None,
+    youtube_url: str | None = None,
 ) -> int:
     """Create a new media entry. Returns the ID."""
     with get_media_db() as conn:
         cursor = conn.execute(
             """INSERT INTO media
-               (award_id, title, description, media_type, filename, original_filename, file_size, group_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (award_id, title, description, media_type, filename, original_filename, file_size, group_id, youtube_url)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (award_id, title.strip(), description.strip(), media_type,
-             filename, original_filename, file_size, group_id),
+             filename, original_filename, file_size, group_id, youtube_url),
         )
         return cursor.lastrowid
 

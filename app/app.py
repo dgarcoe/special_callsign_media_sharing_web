@@ -52,7 +52,7 @@ def page_gallery():
     st.sidebar.header("Filters")
     type_filter = st.sidebar.selectbox(
         "Media type",
-        ["All", "Image", "Video", "Audio", "Document"],
+        ["All", "Image", "Video", "Audio", "Document", "YouTube"],
     )
     selected_type = None if type_filter == "All" else type_filter.lower()
 
@@ -127,8 +127,9 @@ def page_gallery():
                     st.markdown(f"**{label}**")
                 render_media_grid(items, mtype)
 
-        # Download all media for this callsign as ZIP
-        zip_data = mu.build_zip(media_items)
+        # Download all media for this callsign as ZIP (files only, not YouTube links)
+        downloadable = [i for i in media_items if i.get("filename")]
+        zip_data = mu.build_zip(downloadable)
         if zip_data:
             st.download_button(
                 label=f"Download all {cs['name']} media as ZIP",
@@ -206,6 +207,28 @@ def render_media_grid(items: list[dict], media_type: str):
                 st.warning(f"File missing: {item['original_filename']}")
             _render_download_button(item)
 
+    elif media_type == "youtube":
+        for item in items:
+            st.markdown(f"**{item['title']}**")
+            if item.get("description"):
+                st.caption(item["description"])
+            youtube_url = item.get("youtube_url") or ""
+            if youtube_url:
+                video_id = mu.extract_youtube_id(youtube_url)
+                if video_id:
+                    st.markdown(
+                        f'<iframe width="100%" height="315" '
+                        f'src="https://www.youtube.com/embed/{video_id}" '
+                        f'frameborder="0" '
+                        f'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" '
+                        f'allowfullscreen style="border-radius:8px;"></iframe>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(f"[Watch on YouTube]({youtube_url})")
+            else:
+                st.warning("YouTube URL missing for this item.")
+
 
 # ──────────────────────────────────────────────
 # ADMIN PAGES
@@ -230,7 +253,7 @@ def admin_manage_groups():
     award_id = callsign_options[selected_name]
 
     # --- Create new group ---
-    ALL_MEDIA_TYPES = ["image", "video", "audio", "document"]
+    ALL_MEDIA_TYPES = ["image", "video", "audio", "document", "youtube"]
     all_media = db.get_media_by_callsign(award_id)
 
     st.markdown("---")
@@ -465,7 +488,7 @@ def page_admin_panel():
 
 
 def admin_upload_media():
-    """Upload new media content with per-file title and description."""
+    """Upload new media content with per-file title and description, or add a YouTube video."""
     st.subheader("Upload New Media")
 
     callsigns = db.get_all_callsigns()
@@ -485,7 +508,7 @@ def admin_upload_media():
     if award:
         render_award_badge(award)
 
-    # Group selector (filtered to groups that allow the uploaded types)
+    # Group selector
     groups = db.get_groups_by_callsign(award_id)
     group_options = {"(No group)": None}
     for g in groups:
@@ -501,88 +524,154 @@ def admin_upload_media():
             labels = ", ".join(f"{mu.MEDIA_TYPE_ICONS.get(t, '')} {t.capitalize()}" for t in allowed)
             st.caption(f"This group accepts: {labels}")
 
-    all_extensions = []
-    for exts in mu.ALLOWED_EXTENSIONS.values():
-        all_extensions.extend(exts)
+    tab_files, tab_youtube = st.tabs(["Upload Files", "Add YouTube Video"])
 
-    uploaded_files = st.file_uploader(
-        "Choose files",
-        accept_multiple_files=True,
-        type=[ext.lstrip(".") for ext in all_extensions],
-    )
+    # ── File upload tab ──────────────────────────────────────────────────────
+    with tab_files:
+        all_extensions = []
+        for exts in mu.ALLOWED_EXTENSIONS.values():
+            all_extensions.extend(exts)
 
-    if not uploaded_files:
-        return
+        uploaded_files = st.file_uploader(
+            "Choose files",
+            accept_multiple_files=True,
+            type=[ext.lstrip(".") for ext in all_extensions],
+        )
 
-    # Per-file title and description fields
-    st.markdown("---")
-    st.markdown("**Fill in details for each file:**")
+        if uploaded_files:
+            st.markdown("---")
+            st.markdown("**Fill in details for each file:**")
 
-    file_metadata: list[dict] = []
-    all_valid = True
-    for idx, uploaded_file in enumerate(uploaded_files):
-        media_type = mu.detect_media_type(uploaded_file.name)
-        if not media_type:
-            st.warning(f"Unsupported file type: {uploaded_file.name} (will be skipped)")
-            continue
+            file_metadata: list[dict] = []
+            all_valid = True
+            for idx, uploaded_file in enumerate(uploaded_files):
+                media_type = mu.detect_media_type(uploaded_file.name)
+                if not media_type:
+                    st.warning(f"Unsupported file type: {uploaded_file.name} (will be skipped)")
+                    continue
 
-        icon = mu.MEDIA_TYPE_ICONS.get(media_type, "")
-        with st.expander(f"{icon} {uploaded_file.name}", expanded=True):
-            title = st.text_input(
-                "Title", key=f"upload_title_{idx}",
-                value=uploaded_file.name.rsplit(".", 1)[0],
-            )
-            description = st.text_area(
-                "Description", key=f"upload_desc_{idx}", height=68,
-            )
-            if not title.strip():
-                all_valid = False
-            file_metadata.append({
-                "file": uploaded_file,
-                "title": title,
-                "description": description,
-                "media_type": media_type,
-            })
-
-    if not file_metadata:
-        return
-
-    if st.button("Upload all", type="primary"):
-        if not all_valid:
-            st.error("Every file needs a title.")
-            return
-
-        # Validate types against selected group
-        if selected_group_id is not None:
-            sel_group = next((g for g in groups if g["id"] == selected_group_id), None)
-            if sel_group and sel_group.get("allowed_types"):
-                allowed = set(sel_group["allowed_types"].split(","))
-                rejected = [m["file"].name for m in file_metadata if m["media_type"] not in allowed]
-                if rejected:
-                    st.error(
-                        f"The group '{sel_group['name']}' does not accept these file types: "
-                        + ", ".join(rejected)
+                icon = mu.MEDIA_TYPE_ICONS.get(media_type, "")
+                with st.expander(f"{icon} {uploaded_file.name}", expanded=True):
+                    title = st.text_input(
+                        "Title", key=f"upload_title_{idx}",
+                        value=uploaded_file.name.rsplit(".", 1)[0],
                     )
-                    return
+                    description = st.text_area(
+                        "Description", key=f"upload_desc_{idx}", height=68,
+                    )
+                    if not title.strip():
+                        all_valid = False
+                    file_metadata.append({
+                        "file": uploaded_file,
+                        "title": title,
+                        "description": description,
+                        "media_type": media_type,
+                    })
 
-        success_count = 0
-        for meta in file_metadata:
-            stored_name, file_size = mu.save_uploaded_file(meta["file"])
-            db.create_media(
-                award_id=award_id,
-                title=meta["title"].strip(),
-                description=meta["description"].strip(),
-                media_type=meta["media_type"],
-                filename=stored_name,
-                original_filename=meta["file"].name,
-                file_size=file_size,
-                group_id=selected_group_id,
-            )
-            success_count += 1
+            if file_metadata and st.button("Upload all", type="primary"):
+                if not all_valid:
+                    st.error("Every file needs a title.")
+                else:
+                    # Validate types against selected group
+                    rejected = []
+                    if selected_group_id is not None:
+                        sel_group = next((g for g in groups if g["id"] == selected_group_id), None)
+                        if sel_group and sel_group.get("allowed_types"):
+                            allowed = set(sel_group["allowed_types"].split(","))
+                            rejected = [m["file"].name for m in file_metadata if m["media_type"] not in allowed]
 
-        if success_count:
-            st.success(f"Uploaded {success_count} file(s) successfully.")
-            st.rerun()
+                    if rejected:
+                        sel_group = next((g for g in groups if g["id"] == selected_group_id), None)
+                        st.error(
+                            f"The group '{sel_group['name']}' does not accept these file types: "
+                            + ", ".join(rejected)
+                        )
+                    else:
+                        success_count = 0
+                        for meta in file_metadata:
+                            stored_name, file_size = mu.save_uploaded_file(meta["file"])
+                            db.create_media(
+                                award_id=award_id,
+                                title=meta["title"].strip(),
+                                description=meta["description"].strip(),
+                                media_type=meta["media_type"],
+                                filename=stored_name,
+                                original_filename=meta["file"].name,
+                                file_size=file_size,
+                                group_id=selected_group_id,
+                            )
+                            success_count += 1
+                        if success_count:
+                            st.success(f"Uploaded {success_count} file(s) successfully.")
+                            st.rerun()
+
+    # ── YouTube tab ──────────────────────────────────────────────────────────
+    with tab_youtube:
+        st.markdown("Add a YouTube video by URL — it will be embedded in the gallery.")
+
+        yt_title = st.text_input("Video Title", key="yt_title", placeholder="e.g. Introduction to W1AW")
+        yt_desc = st.text_area("Description", key="yt_desc", height=68)
+        yt_url = st.text_input(
+            "YouTube URL",
+            key="yt_url",
+            placeholder="https://www.youtube.com/watch?v=...",
+        )
+
+        # Live preview while admin types the URL
+        if yt_url:
+            preview_id = mu.extract_youtube_id(yt_url)
+            if preview_id:
+                st.caption("✓ Valid YouTube URL — preview:")
+                st.markdown(
+                    f'<iframe width="100%" height="200" '
+                    f'src="https://www.youtube.com/embed/{preview_id}" '
+                    f'frameborder="0" allowfullscreen style="border-radius:8px;"></iframe>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.warning(
+                    "Could not extract a YouTube video ID. "
+                    "Supported formats: youtube.com/watch?v=…, youtu.be/…, youtube.com/shorts/…"
+                )
+
+        if st.button("Add YouTube Video", key="btn_add_yt", type="primary"):
+            errors = []
+            if not yt_title.strip():
+                errors.append("Video title is required.")
+            if not yt_url.strip():
+                errors.append("YouTube URL is required.")
+            else:
+                video_id = mu.extract_youtube_id(yt_url)
+                if not video_id:
+                    errors.append(
+                        "Invalid YouTube URL. Supported formats: "
+                        "youtube.com/watch?v=…, youtu.be/…, youtube.com/shorts/…"
+                    )
+                elif selected_group_id is not None:
+                    sel_group = next((g for g in groups if g["id"] == selected_group_id), None)
+                    if sel_group and sel_group.get("allowed_types"):
+                        if "youtube" not in sel_group["allowed_types"].split(","):
+                            errors.append(
+                                f"The group '{sel_group['name']}' does not accept YouTube videos."
+                            )
+
+            if errors:
+                for err in errors:
+                    st.error(err)
+            else:
+                db.create_media(
+                    award_id=award_id,
+                    title=yt_title.strip(),
+                    description=yt_desc.strip(),
+                    media_type="youtube",
+                    filename="",
+                    original_filename="",
+                    file_size=0,
+                    group_id=selected_group_id,
+                    youtube_url=yt_url.strip(),
+                )
+                st.success(f"YouTube video '{yt_title.strip()}' added successfully.")
+                st.rerun()
 
 
 def admin_manage_media():
@@ -591,7 +680,7 @@ def admin_manage_media():
 
     type_filter = st.selectbox(
         "Filter by type",
-        ["All", "Image", "Video", "Audio", "Document"],
+        ["All", "Image", "Video", "Audio", "Document", "YouTube"],
         key="manage_type_filter",
     )
     selected_type = None if type_filter == "All" else type_filter.lower()
@@ -652,19 +741,31 @@ def admin_manage_media():
                     st.success("Updated.")
                     st.rerun()
             with col2:
-                st.markdown(f"**File:** {item['original_filename']}")
                 st.markdown(f"**Type:** {item['media_type']}")
-                if item["file_size"]:
-                    st.markdown(f"**Size:** {mu.format_file_size(item['file_size'])}")
+                if item["media_type"] == "youtube":
+                    yt_url = item.get("youtube_url") or ""
+                    st.markdown(f"**URL:** {yt_url}")
+                    if yt_url:
+                        vid_id = mu.extract_youtube_id(yt_url)
+                        if vid_id:
+                            st.markdown(
+                                f'<iframe width="100%" height="150" '
+                                f'src="https://www.youtube.com/embed/{vid_id}" '
+                                f'frameborder="0" allowfullscreen style="border-radius:6px;"></iframe>',
+                                unsafe_allow_html=True,
+                            )
+                else:
+                    st.markdown(f"**File:** {item['original_filename']}")
+                    if item["file_size"]:
+                        st.markdown(f"**Size:** {mu.format_file_size(item['file_size'])}")
+                    # Preview for file-based types
+                    file_path = mu.get_media_path(item["filename"])
+                    if os.path.exists(file_path):
+                        if item["media_type"] == "image":
+                            st.image(file_path, width=200)
+                        elif item["media_type"] == "audio":
+                            st.audio(file_path)
                 st.markdown(f"**Uploaded:** {item['uploaded_at']}")
-
-                # Preview
-                file_path = mu.get_media_path(item["filename"])
-                if os.path.exists(file_path):
-                    if item["media_type"] == "image":
-                        st.image(file_path, width=200)
-                    elif item["media_type"] == "audio":
-                        st.audio(file_path)
 
                 if st.button("Delete", key=f"del_{item['id']}", type="secondary"):
                     filename = db.delete_media(item["id"])

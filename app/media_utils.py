@@ -2,6 +2,7 @@
 
 import io
 import os
+import re
 import uuid
 import zipfile
 from pathlib import Path
@@ -20,11 +21,25 @@ MEDIA_TYPE_ICONS = {
     "video": "\U0001f3ac",
     "audio": "\U0001f3b5",
     "document": "\U0001f4c4",
+    "youtube": "\U0001f4fa",
 }
 
 ALL_ALLOWED = set()
 for exts in ALLOWED_EXTENSIONS.values():
     ALL_ALLOWED.update(exts)
+
+
+def extract_youtube_id(url: str) -> str | None:
+    """Extract YouTube video ID from various URL formats."""
+    patterns = [
+        r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/)([A-Za-z0-9_-]{11})",
+        r"youtube\.com/shorts/([A-Za-z0-9_-]{11})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
 
 
 def detect_media_type(filename: str) -> str | None:
@@ -78,6 +93,8 @@ def build_zip(media_items: list[dict]) -> bytes:
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         seen_names: dict[str, int] = {}
         for item in media_items:
+            if not item.get("filename"):  # Skip YouTube / URL-only items
+                continue
             file_path = os.path.join(MEDIA_DIR, item["filename"])
             if not os.path.exists(file_path):
                 continue
