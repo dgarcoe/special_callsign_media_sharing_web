@@ -217,11 +217,11 @@ def render_media_grid(items: list[dict], media_type: str):
                 video_id = mu.extract_youtube_id(youtube_url)
                 if video_id:
                     st.markdown(
-                        f'<iframe width="100%" height="315" '
+                        f'<div style="position:relative;padding-bottom:56.25%;height:0;border-radius:8px;overflow:hidden;">'
+                        f'<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;" '
                         f'src="https://www.youtube.com/embed/{video_id}" '
-                        f'frameborder="0" '
                         f'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" '
-                        f'allowfullscreen style="border-radius:8px;"></iframe>',
+                        f'allowfullscreen></iframe></div>',
                         unsafe_allow_html=True,
                     )
                 else:
@@ -623,9 +623,10 @@ def admin_upload_media():
             if preview_id:
                 st.caption("✓ Valid YouTube URL — preview:")
                 st.markdown(
-                    f'<iframe width="100%" height="200" '
+                    f'<div style="position:relative;padding-bottom:56.25%;height:0;border-radius:8px;overflow:hidden;">'
+                    f'<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;" '
                     f'src="https://www.youtube.com/embed/{preview_id}" '
-                    f'frameborder="0" allowfullscreen style="border-radius:8px;"></iframe>',
+                    f'allowfullscreen></iframe></div>',
                     unsafe_allow_html=True,
                 )
             else:
@@ -749,9 +750,10 @@ def admin_manage_media():
                         vid_id = mu.extract_youtube_id(yt_url)
                         if vid_id:
                             st.markdown(
-                                f'<iframe width="100%" height="150" '
+                                f'<div style="position:relative;padding-bottom:56.25%;height:0;border-radius:6px;overflow:hidden;">'
+                                f'<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;" '
                                 f'src="https://www.youtube.com/embed/{vid_id}" '
-                                f'frameborder="0" allowfullscreen style="border-radius:6px;"></iframe>',
+                                f'allowfullscreen></iframe></div>',
                                 unsafe_allow_html=True,
                             )
                 else:
