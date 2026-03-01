@@ -145,6 +145,19 @@ def page_gallery():
         st.info("No media found matching the selected filters.")
 
 
+def _youtube_embed_html(video_id: str, width_pct: int = 100, border_radius: int = 8) -> str:
+    """Return a responsive 16:9 iframe embed for a YouTube video ID."""
+    padding = (9 / 16) * width_pct
+    return (
+        f'<div style="position:relative;width:{width_pct}%;padding-bottom:{padding:.2f}%;'
+        f'height:0;border-radius:{border_radius}px;overflow:hidden;">'
+        f'<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;" '
+        f'src="https://www.youtube.com/embed/{video_id}" '
+        f'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" '
+        f'allowfullscreen></iframe></div>'
+    )
+
+
 def _render_download_button(item: dict):
     """Render a download button for a single media item."""
     file_path = mu.get_media_path(item["filename"])
@@ -216,12 +229,9 @@ def render_media_grid(items: list[dict], media_type: str):
             if youtube_url:
                 video_id = mu.extract_youtube_id(youtube_url)
                 if video_id:
+                    width_pct = item.get("youtube_width") or 100
                     st.markdown(
-                        f'<div style="position:relative;padding-bottom:56.25%;height:0;border-radius:8px;overflow:hidden;">'
-                        f'<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;" '
-                        f'src="https://www.youtube.com/embed/{video_id}" '
-                        f'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" '
-                        f'allowfullscreen></iframe></div>',
+                        _youtube_embed_html(video_id, width_pct),
                         unsafe_allow_html=True,
                     )
                 else:
@@ -616,6 +626,7 @@ def admin_upload_media():
             key="yt_url",
             placeholder="https://www.youtube.com/watch?v=...",
         )
+        yt_width = st.slider("Embed width", 25, 100, 100, step=5, format="%d%%", key="yt_width")
 
         # Live preview while admin types the URL
         if yt_url:
@@ -623,10 +634,7 @@ def admin_upload_media():
             if preview_id:
                 st.caption("✓ Valid YouTube URL — preview:")
                 st.markdown(
-                    f'<div style="position:relative;padding-bottom:56.25%;height:0;border-radius:8px;overflow:hidden;">'
-                    f'<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;" '
-                    f'src="https://www.youtube.com/embed/{preview_id}" '
-                    f'allowfullscreen></iframe></div>',
+                    _youtube_embed_html(preview_id, yt_width),
                     unsafe_allow_html=True,
                 )
             else:
@@ -670,6 +678,7 @@ def admin_upload_media():
                     file_size=0,
                     group_id=selected_group_id,
                     youtube_url=yt_url.strip(),
+                    youtube_width=yt_width,
                 )
                 st.success(f"YouTube video '{yt_title.strip()}' added successfully.")
                 st.rerun()
@@ -737,8 +746,17 @@ def admin_manage_media():
                 )
                 new_group_id = group_opts[new_group_name]
 
+                if item["media_type"] == "youtube":
+                    new_yt_width = st.slider(
+                        "Embed width", 25, 100,
+                        value=item.get("youtube_width") or 100,
+                        step=5, format="%d%%", key=f"yt_width_{item['id']}",
+                    )
+                else:
+                    new_yt_width = None
+
                 if st.button("Save changes", key=f"save_{item['id']}"):
-                    db.update_media(item["id"], new_title, new_desc, group_id=new_group_id)
+                    db.update_media(item["id"], new_title, new_desc, group_id=new_group_id, youtube_width=new_yt_width)
                     st.success("Updated.")
                     st.rerun()
             with col2:
@@ -749,11 +767,9 @@ def admin_manage_media():
                     if yt_url:
                         vid_id = mu.extract_youtube_id(yt_url)
                         if vid_id:
+                            preview_width = item.get("youtube_width") or 100
                             st.markdown(
-                                f'<div style="position:relative;padding-bottom:56.25%;height:0;border-radius:6px;overflow:hidden;">'
-                                f'<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;" '
-                                f'src="https://www.youtube.com/embed/{vid_id}" '
-                                f'allowfullscreen></iframe></div>',
+                                _youtube_embed_html(vid_id, preview_width, border_radius=6),
                                 unsafe_allow_html=True,
                             )
                 else:

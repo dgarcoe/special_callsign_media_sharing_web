@@ -89,7 +89,8 @@ def init_db():
                     uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
                     sort_order INTEGER,
                     group_id INTEGER REFERENCES media_groups(id) ON DELETE SET NULL,
-                    youtube_url TEXT
+                    youtube_url TEXT,
+                    youtube_width INTEGER
                 )
             """)
         else:
@@ -98,6 +99,7 @@ def init_db():
                 "ALTER TABLE media ADD COLUMN sort_order INTEGER",
                 "ALTER TABLE media ADD COLUMN group_id INTEGER REFERENCES media_groups(id) ON DELETE SET NULL",
                 "ALTER TABLE media ADD COLUMN youtube_url TEXT",
+                "ALTER TABLE media ADD COLUMN youtube_width INTEGER",
             ]:
                 try:
                     conn.execute(migration)
@@ -120,14 +122,15 @@ def init_db():
                         uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
                         sort_order INTEGER,
                         group_id INTEGER REFERENCES media_groups(id) ON DELETE SET NULL,
-                        youtube_url TEXT
+                        youtube_url TEXT,
+                        youtube_width INTEGER
                     )
                 """)
                 conn.execute("""
                     INSERT INTO media_new
                     SELECT id, award_id, title, description, media_type,
                            COALESCE(filename, ''), COALESCE(original_filename, ''),
-                           file_size, uploaded_at, sort_order, group_id, youtube_url
+                           file_size, uploaded_at, sort_order, group_id, youtube_url, youtube_width
                     FROM media
                 """)
                 conn.execute("DROP TABLE media")
@@ -262,15 +265,16 @@ def create_media(
     file_size: int,
     group_id: int | None = None,
     youtube_url: str | None = None,
+    youtube_width: int | None = None,
 ) -> int:
     """Create a new media entry. Returns the ID."""
     with get_media_db() as conn:
         cursor = conn.execute(
             """INSERT INTO media
-               (award_id, title, description, media_type, filename, original_filename, file_size, group_id, youtube_url)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (award_id, title, description, media_type, filename, original_filename, file_size, group_id, youtube_url, youtube_width)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (award_id, title.strip(), description.strip(), media_type,
-             filename, original_filename, file_size, group_id, youtube_url),
+             filename, original_filename, file_size, group_id, youtube_url, youtube_width),
         )
         return cursor.lastrowid
 
@@ -353,12 +357,12 @@ def update_media_order(media_ids: list[int]):
             )
 
 
-def update_media(media_id: int, title: str, description: str, group_id: int | None = None):
+def update_media(media_id: int, title: str, description: str, group_id: int | None = None, youtube_width: int | None = None):
     """Update media metadata."""
     with get_media_db() as conn:
         conn.execute(
-            "UPDATE media SET title = ?, description = ?, group_id = ? WHERE id = ?",
-            (title.strip(), description.strip(), group_id, media_id),
+            "UPDATE media SET title = ?, description = ?, group_id = ?, youtube_width = ? WHERE id = ?",
+            (title.strip(), description.strip(), group_id, youtube_width, media_id),
         )
 
 
