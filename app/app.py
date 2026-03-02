@@ -5,6 +5,7 @@ information and allows admins to upload/manage media for each callsign.
 """
 
 import os
+import html
 import base64
 
 import streamlit as st
@@ -221,23 +222,54 @@ def render_media_grid(items: list[dict], media_type: str):
             _render_download_button(item)
 
     elif media_type == "youtube":
+        # Render all YouTube cards in one flexbox block so:
+        # · title/description are constrained to the same width as the embed
+        # · cards with small enough widths sit side-by-side automatically
+        # · padding-bottom on each card gives generous vertical separation
+        cards = []
         for item in items:
-            st.markdown(f"**{item['title']}**")
-            if item.get("description"):
-                st.caption(item["description"])
             youtube_url = item.get("youtube_url") or ""
-            if youtube_url:
-                video_id = mu.extract_youtube_id(youtube_url)
-                if video_id:
-                    width_pct = item.get("youtube_width") or 100
-                    st.markdown(
-                        _youtube_embed_html(video_id, width_pct),
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown(f"[Watch on YouTube]({youtube_url})")
+            video_id = mu.extract_youtube_id(youtube_url) if youtube_url else None
+            width_pct = item.get("youtube_width") or 100
+
+            title_h = html.escape(item["title"])
+            desc = item.get("description") or ""
+            desc_block = (
+                f'<p style="margin:4px 0 10px;font-size:0.875em;opacity:0.7;">{html.escape(desc)}</p>'
+                if desc else ""
+            )
+
+            if video_id:
+                # Inner wrapper uses fixed 56.25% because its own width already
+                # equals width_pct% of the container (padding handled by outer card)
+                embed = (
+                    '<div style="position:relative;padding-bottom:56.25%;height:0;'
+                    'border-radius:8px;overflow:hidden;">'
+                    '<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;" '
+                    f'src="https://www.youtube.com/embed/{video_id}" '
+                    'allow="accelerometer; autoplay; clipboard-write; encrypted-media; '
+                    'gyroscope; picture-in-picture" allowfullscreen></iframe></div>'
+                )
+            elif youtube_url:
+                embed = f'<a href="{html.escape(youtube_url)}" target="_blank">Watch on YouTube</a>'
             else:
-                st.warning("YouTube URL missing for this item.")
+                embed = '<em style="opacity:0.5;">YouTube URL missing.</em>'
+
+            cards.append(
+                f'<div style="width:{width_pct}%;padding:0 12px 44px;box-sizing:border-box;">'
+                f'<p style="font-weight:600;margin:0 0 4px;">{title_h}</p>'
+                f'{desc_block}'
+                f'{embed}'
+                f'</div>'
+            )
+
+        if cards:
+            st.markdown(
+                '<div style="display:flex;flex-wrap:wrap;margin:0 -12px;">'
+                + "".join(cards)
+                + '</div>',
+                unsafe_allow_html=True,
+            )
 
 
 # ──────────────────────────────────────────────
