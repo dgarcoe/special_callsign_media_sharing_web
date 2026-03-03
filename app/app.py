@@ -234,8 +234,9 @@ def render_media_grid(items: list[dict], media_type: str):
 
             title_h = html.escape(item["title"])
             desc = item.get("description") or ""
+            desc_h = html.escape(desc).replace("\n", "<br>")
             desc_block = (
-                f'<p style="margin:4px 0 10px;font-size:0.875em;opacity:0.7;">{html.escape(desc)}</p>'
+                f'<p style="margin:4px 0 10px;font-size:0.875em;opacity:0.7;">{desc_h}</p>'
                 if desc else ""
             )
 
